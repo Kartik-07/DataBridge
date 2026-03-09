@@ -1,0 +1,110 @@
+[
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 14,
+    "rows": 154124,
+    "duration": "1m 1s",
+    "timestamp": "2026-03-09 03:43"
+  },
+  {
+    "source": "snowflake",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 1,
+    "rows": 88,
+    "duration": "0m 22s",
+    "timestamp": "2026-03-09 00:46"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 25,
+    "rows": 9118253,
+    "duration": "31m 1s",
+    "timestamp": "2026-03-08 23:36"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 25,
+    "rows": 9118253,
+    "duration": "32m 54s",
+    "timestamp": "2026-03-08 21:14"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 25,
+    "rows": 9118253,
+    "duration": "1m 12s",
+    "timestamp": "2026-03-08 18:52"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "failed",
+    "tables": 25,
+    "rows": 9118253,
+    "duration": "0m 34s",
+    "timestamp": "2026-03-08 18:47"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 9,
+    "rows": 13464,
+    "duration": "1m 30s",
+    "timestamp": "2026-03-08 02:42"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 2,
+    "rows": 116,
+    "duration": "0m 24s",
+    "timestamp": "2026-03-08 02:35"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 2,
+    "rows": 116,
+    "duration": "0m 15s",
+    "timestamp": "2026-03-08 02:35"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 25,
+    "rows": 9118253,
+    "duration": "20m 12s",
+    "timestamp": "2026-03-08 02:23"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 25,
+    "rows": 9118253,
+    "duration": "19m 54s",
+    "timestamp": "2026-03-08 01:39"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 25,
+    "rows": 9118253,
+    "duration": "12m 25s",
+    "timestamp": "2026-03-08 00:31"
+  }
+]

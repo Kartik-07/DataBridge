@@ -1,0 +1,115 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=SF+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 98%;
+    --foreground: 0 0% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 11%;
+
+    --primary: 211 100% 50%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 11%;
+
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 45%;
+
+    --accent: 0 0% 96%;
+    --accent-foreground: 0 0% 11%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 91%;
+    --input: 0 0% 91%;
+    --ring: 211 100% 50%;
+
+    --radius: 0.875rem;
+
+    --success: 142 71% 45%;
+    --warning: 38 92% 50%;
+    --info: 211 100% 50%;
+
+    --surface-glass: 0 0% 100% / 0.72;
+    --surface-elevated: 0 0% 100%;
+
+    --shadow-sm: 0 1px 2px hsl(0 0% 0% / 0.04);
+    --shadow-md: 0 4px 16px hsl(0 0% 0% / 0.06), 0 1px 3px hsl(0 0% 0% / 0.04);
+    --shadow-lg: 0 8px 32px hsl(0 0% 0% / 0.08), 0 2px 8px hsl(0 0% 0% / 0.04);
+    --shadow-xl: 0 16px 48px hsl(0 0% 0% / 0.1), 0 4px 16px hsl(0 0% 0% / 0.05);
+
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 0 0% 11%;
+    --sidebar-primary: 211 100% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 96%;
+    --sidebar-accent-foreground: 0 0% 11%;
+    --sidebar-border: 0 0% 91%;
+    --sidebar-ring: 211 100% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Display', 'Helvetica Neue', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+
+  code, .font-mono {
+    font-family: 'SF Mono', 'JetBrains Mono', 'Menlo', monospace;
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: hsla(var(--surface-glass));
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+  }
+
+  .glass-subtle {
+    background: hsla(0 0% 100% / 0.6);
+    backdrop-filter: blur(40px) saturate(200%);
+    -webkit-backdrop-filter: blur(40px) saturate(200%);
+  }
+
+  .shadow-apple-sm {
+    box-shadow: var(--shadow-sm);
+  }
+
+  .shadow-apple {
+    box-shadow: var(--shadow-md);
+  }
+
+  .shadow-apple-lg {
+    box-shadow: var(--shadow-lg);
+  }
+
+  .shadow-apple-xl {
+    box-shadow: var(--shadow-xl);
+  }
+
+  .gradient-mesh {
+    background: 
+      radial-gradient(at 20% 20%, hsl(211 100% 50% / 0.06) 0px, transparent 50%),
+      radial-gradient(at 80% 80%, hsl(280 80% 60% / 0.04) 0px, transparent 50%),
+      radial-gradient(at 50% 50%, hsl(142 71% 45% / 0.03) 0px, transparent 50%);
+  }
+}
