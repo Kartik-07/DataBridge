@@ -1,6 +1,14 @@
-# DataBridge 
+# DataBridge – Open Source Data Migration Tool for Databases
 
-A fast and reliable database migration tool that enables seamless schema and data migration between multiple database systems with real-time progress tracking and dependency handling.
+**DataBridge** is an open-source **database data migration tool** that enables fast, reliable migration of **schema and data between multiple database systems** such as PostgreSQL, MySQL, Snowflake, SQL Server, and SQLite.
+
+It provides **parallel data transfer, dependency-aware schema migration, batch checkpointing, and real-time progress tracking** through a modern web interface.
+
+![License](https://img.shields.io/github/license/Kartik-07/databridge)
+![Stars](https://img.shields.io/github/stars/Kartik-07/databridge)
+![Issues](https://img.shields.io/github/issues/Kartik-07/databridge)
+![Python](https://img.shields.io/badge/python-3.9+-blue)
+![React](https://img.shields.io/badge/frontend-react-blue)
 
 ## Features
 
