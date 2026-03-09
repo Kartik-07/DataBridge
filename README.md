@@ -1,6 +1,6 @@
-# DataBridge
+# DataBridge 
 
-A full-stack database migration tool that enables seamless schema and data migration between multiple database systems with real-time progress tracking and intelligent dependency handling.
+A fast and reliable database migration tool that enables seamless schema and data migration between multiple database systems with real-time progress tracking and dependency handling.
 
 ## Features
 
