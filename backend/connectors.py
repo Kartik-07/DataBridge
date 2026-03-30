@@ -487,6 +487,8 @@ def get_columns(
     pg_schema = schema or "public"
 
     if db_type == DbType.POSTGRESQL:
+        # typtype comes from pg_attribute → pg_type (authoritative). Fallback: join via udt_schema/udt_name
+        # (the udt join alone can miss ENUMs/domain types in some catalogs, leaving typtype NULL).
         cur.execute("""
             SELECT
                 c.column_name,
@@ -494,8 +496,23 @@ def get_columns(
                 c.is_nullable,
                 c.column_default,
                 CASE WHEN pk.column_name IS NOT NULL THEN true ELSE false END as is_pk,
-                c.udt_name
+                c.udt_name,
+                COALESCE(ty.typtype, t_udt.typtype) AS pg_typtype
             FROM information_schema.columns c
+            LEFT JOIN pg_catalog.pg_namespace tbl_ns ON tbl_ns.nspname = c.table_schema
+            LEFT JOIN pg_catalog.pg_class cl
+                ON cl.relnamespace = tbl_ns.oid
+                AND cl.relname = c.table_name
+                AND cl.relkind IN ('r', 'p', 'f', 'm')
+            LEFT JOIN pg_catalog.pg_attribute a
+                ON a.attrelid = cl.oid
+                AND a.attname = c.column_name
+                AND a.attnum > 0
+                AND NOT a.attisdropped
+            LEFT JOIN pg_catalog.pg_type ty ON ty.oid = a.atttypid
+            LEFT JOIN pg_catalog.pg_namespace udt_ns ON udt_ns.nspname = c.udt_schema
+            LEFT JOIN pg_catalog.pg_type t_udt
+                ON t_udt.typnamespace = udt_ns.oid AND t_udt.typname = c.udt_name
             LEFT JOIN (
                 SELECT ku.column_name
                 FROM information_schema.table_constraints tc
@@ -511,15 +528,19 @@ def get_columns(
 
         columns = []
         for row in cur.fetchall():
-            col_name, data_type, is_nullable, default, is_pk, udt_name = row
+            col_name, data_type, is_nullable, default, is_pk, udt_name, pg_typtype = row
+            is_user_defined = False
 
             # Resolve ARRAY type: udt_name starts with '_' for array element type
             if data_type == "ARRAY" and udt_name:
                 element_type = udt_name.lstrip("_")
                 data_type = f"{element_type}[]"
-            # Resolve USER-DEFINED type: use the actual type name (e.g. vector, geometry)
+            # Resolve USER-DEFINED type: use the actual type name (e.g. vector, geometry, ENUM labels)
             elif data_type == "USER-DEFINED" and udt_name:
                 data_type = udt_name
+                # Coerce ENUMs and DOMAINs to TEXT on the target; keep base/extension types (e.g. vector) native.
+                if pg_typtype in ("e", "d"):
+                    is_user_defined = True
 
             columns.append(ColumnInfo(
                 name=col_name,
@@ -527,6 +548,7 @@ def get_columns(
                 is_nullable=is_nullable == "YES",
                 default=str(default) if default else None,
                 is_primary_key=bool(is_pk),
+                is_user_defined=is_user_defined,
             ))
         cur.close()
         return columns
@@ -565,7 +587,8 @@ def get_columns(
                 c.DATA_TYPE,
                 c.IS_NULLABLE,
                 c.COLUMN_DEFAULT,
-                CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END
+                CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END,
+                c.DOMAIN_NAME
             FROM INFORMATION_SCHEMA.COLUMNS c
             LEFT JOIN (
                 SELECT ku.COLUMN_NAME
@@ -580,12 +603,15 @@ def get_columns(
         """, (schema, table_name, schema, table_name))
         columns = []
         for row in cur.fetchall():
+            domain_name = row[5] if len(row) > 5 else None
+            is_udt = bool(domain_name and str(domain_name).strip())
             columns.append(ColumnInfo(
                 name=row[0],
                 data_type=row[1],
                 is_nullable=row[2] == "YES",
                 default=str(row[3]) if row[3] else None,
                 is_primary_key=bool(row[4]),
+                is_user_defined=is_udt,
             ))
         cur.close()
         return columns
@@ -611,12 +637,15 @@ def get_columns(
 
     columns = []
     for row in cur.fetchall():
+        raw_type = row[1]
+        is_udt = raw_type.lower() in ("enum", "set") if isinstance(raw_type, str) else False
         columns.append(ColumnInfo(
             name=row[0],
-            data_type=row[1],
+            data_type=raw_type,
             is_nullable=row[2] == "YES",
             default=str(row[3]) if row[3] else None,
             is_primary_key=bool(row[4]),
+            is_user_defined=is_udt,
         ))
     cur.close()
     return columns

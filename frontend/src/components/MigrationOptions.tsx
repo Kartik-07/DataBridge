@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Settings2, ChevronDown, ChevronRight, Database, Table2, Search, Loader2, Workflow, DatabaseBackup, LayoutGrid, Code, ListOrdered, Folder, MoreVertical, ShieldCheck, ArrowRight, Table as TableIcon } from "lucide-react";
+import { Settings2, ChevronDown, ChevronRight, Database, Table2, Search, Loader2, Workflow, DatabaseBackup, LayoutGrid, Code, ListOrdered, Folder, MoreVertical, ShieldCheck, ArrowRight, Table as TableIcon, File } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   type MigrationOptions as MigrationOptionsType,
   type ConnectionConfig,
+  type FileSourceConfig,
+  type FileInfo,
   fetchSchemaTables,
 } from "@/services/api";
 
@@ -17,12 +19,20 @@ interface MigrationOptionsProps {
   onOptionsChange: (options: MigrationOptionsType) => void;
   availableSchemas: string[];
   sourceConfig: ConnectionConfig | null;
+  fileSourceConfig?: FileSourceConfig | null;
+  selectedFiles?: FileInfo[];
+  isFileSource?: boolean;
   onNext: () => void;
   onCancel: () => void;
   migrating: boolean;
 }
 
-export function MigrationOptions({ options, onOptionsChange, availableSchemas, sourceConfig, onNext, onCancel, migrating }: MigrationOptionsProps) {
+function tableNameFromPath(path: string): string {
+  const base = path.split("/").pop() ?? path;
+  return base.replace(/\.[^.]+$/, "");
+}
+
+export function MigrationOptions({ options, onOptionsChange, availableSchemas, sourceConfig, fileSourceConfig, selectedFiles, isFileSource, onNext, onCancel, migrating }: MigrationOptionsProps) {
   const [schemaTables, setSchemaTables] = useState<Record<string, string[]>>({});
   const [selectedSchemas, setSelectedSchemas] = useState<Set<string>>(new Set());
   const [selectedTables, setSelectedTables] = useState<Record<string, Set<string>>>({});
@@ -32,9 +42,28 @@ export function MigrationOptions({ options, onOptionsChange, availableSchemas, s
 
   const schemas = Object.keys(schemaTables);
 
-  // Fetch tables grouped by schema when sourceConfig is available
+  // Build schema/table tree from file list when in file mode
   useEffect(() => {
-    if (!sourceConfig) return;
+    if (!isFileSource) return;
+    const files = selectedFiles ?? [];
+    const tableNames = files.map(f => tableNameFromPath(f.path));
+    const grouped: Record<string, string[]> = { "Files": tableNames };
+    setSchemaTables(grouped);
+    setSelectedSchemas(new Set(["Files"]));
+    setSelectedTables({ "Files": new Set(tableNames) });
+    setExpandedSchemas(new Set(["Files"]));
+    onOptionsChange({
+      ...options,
+      schemas: [],
+      selected_tables: {},
+      total_tables_count: tableNames.length,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFileSource, selectedFiles]);
+
+  // Fetch tables grouped by schema when sourceConfig is available (DB mode)
+  useEffect(() => {
+    if (isFileSource || !sourceConfig) return;
     setLoading(true);
     fetchSchemaTables(sourceConfig)
       .then((grouped) => {
@@ -46,7 +75,6 @@ export function MigrationOptions({ options, onOptionsChange, availableSchemas, s
           allTables[s] = new Set(grouped[s]);
         });
         setSelectedTables(allTables);
-        // Expand public by default if it exists
         if (schemaNames.includes("public")) {
           setExpandedSchemas(new Set(["public"]));
         }
@@ -68,7 +96,7 @@ export function MigrationOptions({ options, onOptionsChange, availableSchemas, s
       })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceConfig]);
+  }, [sourceConfig, isFileSource]);
 
   const syncOptions = (
     newSelectedSchemas: Set<string>,
@@ -179,54 +207,62 @@ export function MigrationOptions({ options, onOptionsChange, availableSchemas, s
             <Workflow className="h-5 w-5 text-[#E85C1C]" />
             <h2 className="text-[16px] font-bold text-foreground">Migration Object Types</h2>
           </div>
-          <button onClick={toggleAllTypes} className="text-[#E85C1C] text-[13px] font-medium hover:underline">
-            Select all types
-          </button>
+          {!isFileSource && (
+            <button onClick={toggleAllTypes} className="text-[#E85C1C] text-[13px] font-medium hover:underline">
+              Select all types
+            </button>
+          )}
         </div>
         
-        <div className="grid grid-cols-5 gap-4">
+        <div className={`grid gap-4 ${isFileSource ? "grid-cols-2" : "grid-cols-5"}`}>
           <ObjectTypeCard
             label="Schema"
-            desc="Table structures & definitions"
+            desc={isFileSource ? "Create target tables" : "Table structures & definitions"}
             icon={<Workflow className="h-5 w-5" />}
             checked={options.migrate_schema}
             onToggle={() => toggle("migrate_schema")}
           />
           <ObjectTypeCard
             label="Data"
-            desc="Table records & row data"
+            desc={isFileSource ? "Import file rows" : "Table records & row data"}
             icon={<DatabaseBackup className="h-5 w-5" />}
             checked={options.migrate_data}
             onToggle={() => toggle("migrate_data")}
           />
-          <ObjectTypeCard
-            label="Views"
-            desc="Virtual tables & queries"
-            icon={<LayoutGrid className="h-5 w-5" />}
-            checked={options.migrate_views}
-            onToggle={() => toggle("migrate_views")}
-          />
-          <ObjectTypeCard
-            label="Functions"
-            desc="Stored procedures & code"
-            icon={<Code className="h-5 w-5" />}
-            checked={options.migrate_functions}
-            onToggle={() => toggle("migrate_functions")}
-          />
-          <ObjectTypeCard
-            label="Sequences"
-            desc="Auto-incrementing values"
-            icon={<ListOrdered className="h-5 w-5" />}
-            checked={options.migrate_sequences}
-            onToggle={() => toggle("migrate_sequences")}
-          />
+          {!isFileSource && (
+            <>
+              <ObjectTypeCard
+                label="Views"
+                desc="Virtual tables & queries"
+                icon={<LayoutGrid className="h-5 w-5" />}
+                checked={options.migrate_views}
+                onToggle={() => toggle("migrate_views")}
+              />
+              <ObjectTypeCard
+                label="Functions"
+                desc="Stored procedures & code"
+                icon={<Code className="h-5 w-5" />}
+                checked={options.migrate_functions}
+                onToggle={() => toggle("migrate_functions")}
+              />
+              <ObjectTypeCard
+                label="Sequences"
+                desc="Auto-incrementing values"
+                icon={<ListOrdered className="h-5 w-5" />}
+                checked={options.migrate_sequences}
+                onToggle={() => toggle("migrate_sequences")}
+              />
+            </>
+          )}
         </div>
       </div>
 
-      {/* Schemas & Tables Section */}
+      {/* Schemas & Tables / Files Section */}
       <div className="bg-white rounded-xl border border-border/60 shadow-sm overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border/60 bg-[#FAFBFC]">
-          <h3 className="text-[15px] font-bold text-foreground">Schemas & Tables</h3>
+          <h3 className="text-[15px] font-bold text-foreground">
+            {isFileSource ? "Files to Import" : "Schemas & Tables"}
+          </h3>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={expandAll} className="h-8 text-[12px] font-semibold text-foreground border-border/80">
               {expandedSchemas.size === schemas.length ? "Collapse All" : "Expand All"}
@@ -237,14 +273,14 @@ export function MigrationOptions({ options, onOptionsChange, availableSchemas, s
           </div>
         </div>
 
-        <ScrollArea className="max-h-[400px]">
+        <ScrollArea className="h-[400px] w-full rounded-b-xl">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-16 text-muted-foreground space-y-3">
               <Loader2 className="h-6 w-6 animate-spin text-primary/60" />
               <span className="text-[13px] font-medium">Fetching objects…</span>
             </div>
           ) : (
-            <div className="py-2">
+            <div className="py-2 min-w-max">
               {schemas.map((schema) => {
                 const tables = schemaTables[schema] || [];
                 const isSelected = selectedSchemas.has(schema);
@@ -264,10 +300,13 @@ export function MigrationOptions({ options, onOptionsChange, availableSchemas, s
                         <button onClick={() => toggleExpand(schema)} className="p-0.5 hover:bg-secondary rounded">
                           {isExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
                         </button>
-                        <Folder className="h-4 w-4 text-[#E85C1C]" fill="#E85C1C" fillOpacity={0.2} strokeWidth={1.5} />
+                        {isFileSource
+                          ? <File className="h-4 w-4 text-[#E85C1C]" />
+                          : <Folder className="h-4 w-4 text-[#E85C1C]" fill="#E85C1C" fillOpacity={0.2} strokeWidth={1.5} />
+                        }
                         <span className="text-[13px] font-bold text-foreground">{schema}</span>
                         <span className="text-[10px] font-bold text-muted-foreground bg-secondary px-2 py-0.5 rounded-full uppercase tracking-wider">
-                          {tableCount} TABLES
+                          {tableCount} {isFileSource ? "FILES" : "TABLES"}
                         </span>
                       </div>
                       <div className="flex items-center gap-3">

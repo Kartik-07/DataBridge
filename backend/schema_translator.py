@@ -1,10 +1,13 @@
 """
 Schema translator — converts DDL between PostgreSQL, MySQL, and Snowflake.
-Handles type mapping, quoting conventions, and constraint syntax.
+Handles type mapping, quoting conventions, constraint syntax, and row-level
+data transformations (string, null, PII, numeric, type-casting).
 """
 from __future__ import annotations
 
-from typing import Optional
+import hashlib
+import re
+from typing import Any, Optional
 
 from models import DbType, ColumnInfo, TableInfo, ColumnMapping
 
@@ -475,6 +478,58 @@ def _get_type_map(source: DbType, target: DbType) -> dict[str, str]:
     return maps.get(key, {})
 
 
+def default_string_type_for_engine(target: DbType) -> str:
+    """Built-in string type for columns that use engine-specific user-defined types (ENUM, domains, etc.)."""
+    if target == DbType.MYSQL:
+        return "VARCHAR(255)"
+    if target == DbType.SQLSERVER:
+        return "NVARCHAR(MAX)"
+    if target == DbType.SNOWFLAKE:
+        return "VARCHAR"
+    if target == DbType.SQLITE:
+        return "TEXT"
+    return "TEXT"
+
+
+def map_column_type_for_migration(
+    col: ColumnInfo,
+    source_type: DbType,
+    target_type: DbType,
+    migrating_fresh: bool,
+) -> str:
+    """Resolve target SQL type for a column, coercing user-defined source types to portable strings."""
+    if col.is_user_defined:
+        return default_string_type_for_engine(target_type)
+    if migrating_fresh and source_type == target_type:
+        return col.data_type
+    return translate_type(col.data_type, source_type, target_type)
+
+
+def _strip_postgresql_cast_suffixes(expr: str) -> str:
+    """Remove trailing ::type casts so literals work on TEXT/VARCHAR (e.g. 'wip'::scenario_status → 'wip')."""
+    s = expr.strip()
+    while True:
+        if "::" not in s:
+            break
+        m = re.match(r"^(.*)\s*::\s*[\w.]+\s*$", s, re.DOTALL)
+        if not m:
+            break
+        s = m.group(1).strip()
+    return s
+
+
+def default_expression_for_target_column(col: ColumnInfo) -> Optional[str]:
+    """Adjust column default when user-defined types are mapped to plain strings."""
+    if not col.default:
+        return None
+    if not col.is_user_defined:
+        return col.default
+    if "::" in col.default:
+        stripped = _strip_postgresql_cast_suffixes(col.default)
+        return stripped if stripped else None
+    return col.default
+
+
 def translate_type(col_type: str, source: DbType, target: DbType) -> str:
     """Translate a single column type from source dialect to target dialect."""
     if source == target:
@@ -508,8 +563,183 @@ def translate_type(col_type: str, source: DbType, target: DbType) -> str:
             return f"{mapped}{length_part}"
         return mapped
 
-    # Fallback for USER-DEFINED / unknown types → TEXT
-    return "TEXT"
+    # Fallback for USER-DEFINED / unknown types
+    return default_string_type_for_engine(target)
+
+
+# ── Row-level Data Transformations ───────────────────────────────────────────
+#
+# Transform rules are pipe-separated strings applied left-to-right, e.g.
+#   "trim|uppercase|truncate:255"
+# Each rule name is case-insensitive.  Parameters follow after colons.
+
+AVAILABLE_TRANSFORMS: dict[str, dict] = {
+    # ── String Formatting & Cleansing ──
+    "uppercase":        {"category": "string",  "label": "Uppercase",          "params": [],                        "description": "Convert text to UPPER CASE"},
+    "lowercase":        {"category": "string",  "label": "Lowercase",          "params": [],                        "description": "Convert text to lower case"},
+    "titlecase":        {"category": "string",  "label": "Title Case",         "params": [],                        "description": "Convert text to Title Case"},
+    "trim":             {"category": "string",  "label": "Trim",               "params": [],                        "description": "Remove leading & trailing whitespace"},
+    "ltrim":            {"category": "string",  "label": "Left Trim",          "params": [],                        "description": "Remove leading whitespace"},
+    "rtrim":            {"category": "string",  "label": "Right Trim",         "params": [],                        "description": "Remove trailing whitespace"},
+    "truncate":         {"category": "string",  "label": "Truncate",           "params": ["length"],                "description": "Cut string to max length"},
+    "replace":          {"category": "string",  "label": "Replace",            "params": ["old", "new"],            "description": "Replace substring occurrences"},
+    "strip_html":       {"category": "string",  "label": "Strip HTML",         "params": [],                        "description": "Remove HTML tags, keep text content"},
+    # ── Null Handling & Defaults ──
+    "coalesce":         {"category": "null",    "label": "Coalesce",           "params": ["default_value"],         "description": "Replace NULL with a default value"},
+    "nullif":           {"category": "null",    "label": "Null If",            "params": ["value"],                 "description": "Convert specific value to NULL"},
+    # ── Privacy, Security & PII ──
+    "mask_email":       {"category": "pii",     "label": "Mask Email",         "params": [],                        "description": "u***@example.com"},
+    "mask_credit_card": {"category": "pii",     "label": "Mask Credit Card",   "params": [],                        "description": "****-****-****-1234"},
+    "hash":             {"category": "pii",     "label": "Hash",               "params": ["algorithm"],             "description": "One-way hash (sha256 / md5)"},
+    "redact":           {"category": "pii",     "label": "Redact",             "params": [],                        "description": "Replace value with [REDACTED]"},
+    # ── Numeric & Math ──
+    "round":            {"category": "numeric", "label": "Round",              "params": ["decimals"],              "description": "Round to N decimal places"},
+    "multiply":         {"category": "numeric", "label": "Multiply",           "params": ["factor"],                "description": "Multiply by a factor"},
+    "divide":           {"category": "numeric", "label": "Divide",             "params": ["factor"],                "description": "Divide by a factor"},
+    "abs":              {"category": "numeric", "label": "Absolute",           "params": [],                        "description": "Convert to absolute (positive) value"},
+    # ── Type Casting & Normalisation ──
+    "to_boolean":       {"category": "cast",    "label": "To Boolean",         "params": [],                        "description": "Y/N/1/0/true/false → Python bool"},
+    "to_string":        {"category": "cast",    "label": "To String",          "params": [],                        "description": "Force value to string"},
+}
+
+_TRUTHY_STRINGS = frozenset({"1", "true", "t", "yes", "y", "on"})
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _apply_single_transform(val: Any, rule: str) -> Any:
+    """Apply one atomic transform rule to *val* and return the result."""
+    parts = rule.split(":")
+    name = parts[0].strip().lower()
+
+    # ── String ──────────────────────────────────────────────────────────
+    if name == "uppercase":
+        return str(val).upper() if val is not None else None
+    if name == "lowercase":
+        return str(val).lower() if val is not None else None
+    if name == "titlecase":
+        return str(val).title() if val is not None else None
+    if name == "trim":
+        return str(val).strip() if val is not None else None
+    if name == "ltrim":
+        return str(val).lstrip() if val is not None else None
+    if name == "rtrim":
+        return str(val).rstrip() if val is not None else None
+
+    if name == "truncate":
+        if val is None:
+            return None
+        length = int(parts[1]) if len(parts) > 1 else 255
+        return str(val)[:length]
+
+    if name == "replace":
+        if val is None:
+            return None
+        old_s = parts[1] if len(parts) > 1 else ""
+        new_s = parts[2] if len(parts) > 2 else ""
+        return str(val).replace(old_s, new_s)
+
+    if name == "strip_html":
+        if val is None:
+            return None
+        return _HTML_TAG_RE.sub("", str(val))
+
+    # ── Null handling ───────────────────────────────────────────────────
+    if name == "coalesce":
+        if val is None or (isinstance(val, str) and val == ""):
+            return parts[1] if len(parts) > 1 else ""
+        return val
+
+    if name == "nullif":
+        check = parts[1] if len(parts) > 1 else ""
+        if val is None:
+            return None
+        if str(val) == check:
+            return None
+        return val
+
+    # ── PII / Privacy ──────────────────────────────────────────────────
+    if name == "mask_email":
+        if val is None:
+            return None
+        s = str(val)
+        at_idx = s.find("@")
+        if at_idx > 1:
+            return s[0] + "***" + s[at_idx:]
+        if at_idx == 1:
+            return s[0] + "***" + s[at_idx:]
+        return "***"
+
+    if name == "mask_credit_card":
+        if val is None:
+            return None
+        digits = re.sub(r"\D", "", str(val))
+        last4 = digits[-4:] if len(digits) >= 4 else digits
+        return f"****-****-****-{last4}"
+
+    if name == "hash":
+        if val is None:
+            return None
+        algo = parts[1].lower() if len(parts) > 1 else "sha256"
+        raw = str(val).encode("utf-8")
+        if algo == "md5":
+            return hashlib.md5(raw).hexdigest()
+        return hashlib.sha256(raw).hexdigest()
+
+    if name == "redact":
+        return None if val is None else "[REDACTED]"
+
+    # ── Numeric ─────────────────────────────────────────────────────────
+    if name == "round":
+        if val is None:
+            return None
+        decimals = int(parts[1]) if len(parts) > 1 else 0
+        return round(float(val), decimals)
+
+    if name == "multiply":
+        if val is None:
+            return None
+        factor = float(parts[1]) if len(parts) > 1 else 1.0
+        return float(val) * factor
+
+    if name == "divide":
+        if val is None:
+            return None
+        divisor = float(parts[1]) if len(parts) > 1 else 1.0
+        if divisor == 0:
+            return None
+        return float(val) / divisor
+
+    if name == "abs":
+        if val is None:
+            return None
+        return abs(float(val))
+
+    # ── Type casting ────────────────────────────────────────────────────
+    if name == "to_boolean":
+        if val is None:
+            return None
+        return str(val).strip().lower() in _TRUTHY_STRINGS
+
+    if name == "to_string":
+        return None if val is None else str(val)
+
+    # Unknown rule — pass through unchanged
+    return val
+
+
+def apply_transform_rules(val: Any, rules_str: str) -> Any:
+    """Apply a pipe-separated chain of transform rules to a single cell value.
+
+    Example rules_str: ``"trim|lowercase|truncate:100"``
+    """
+    if not rules_str:
+        return val
+    for rule in rules_str.split("|"):
+        rule = rule.strip()
+        if rule:
+            val = _apply_single_transform(val, rule)
+    return val
 
 
 # ── DDL Generation ──────────────────────────────────────────────────────────
@@ -563,19 +793,24 @@ def generate_create_table(
         m = mappings.get(col.name)
         col_name = m.target_name if m else col.name
         # Preserve exact datatype representation natively if source and target DBs are the identical engine type.
-        # Otherwise, we MUST translate to prevent dialect crashes (e.g. Postgres JSONB -> Snowflake VARIANT)
-        if m and m.target_type:
+        # User-defined types (ENUM, domains, etc.) map to TEXT/VARCHAR on the target so CREATE TABLE does not
+        # reference missing type names.
+        # Schema Mapping often sets target_type to the source type name (e.g. request_status); that must not
+        # override coercion for is_user_defined columns.
+        if m and m.target_type and not col.is_user_defined:
             mapped_type = m.target_type
-        elif migrating_fresh and source_type == target_type:
-            mapped_type = col.data_type
         else:
-            mapped_type = translate_type(col.data_type, source_type, target_type)
-            
+            mapped_type = map_column_type_for_migration(
+                col, source_type, target_type, migrating_fresh
+            )
+
+        effective_default = default_expression_for_target_column(col)
+
         # Handle AUTO_INCREMENT — don't add NOT NULL separately since AI implies it
         nullable = "" if col.is_nullable or "AUTO_INCREMENT" in mapped_type.upper() or "AUTOINCREMENT" in mapped_type.upper() else " NOT NULL"
         default = ""
-        if col.default and "nextval" not in (col.default or "").lower() and "auto_increment" not in mapped_type.lower() and "autoincrement" not in mapped_type.lower():
-            default = f" DEFAULT {col.default}"
+        if effective_default and "nextval" not in (effective_default or "").lower() and "auto_increment" not in mapped_type.lower() and "autoincrement" not in mapped_type.lower():
+            default = f" DEFAULT {effective_default}"
         cols.append(f"  {qc(col_name)} {mapped_type}{nullable}{default}")
         if col.is_primary_key:
             pk_cols.append(qc(col_name))

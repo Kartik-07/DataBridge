@@ -8,6 +8,47 @@ const API_BASE = "/api";
 
 export type DbType = "postgresql" | "mysql" | "snowflake" | "sqlite" | "sqlserver";
 
+// ── File Source Types ───────────────────────────────────────────────────────
+
+export type FileSourceType = "local" | "sftp" | "s3";
+export type FileFormat = "json" | "jsonl" | "csv" | "xlsx" | "parquet";
+
+export interface FileSourceConfig {
+  source_type: FileSourceType;
+  // Local FS
+  file_paths?: string[];
+  // SFTP
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string;
+  key_path?: string;
+  remote_paths?: string[];
+  // S3
+  bucket?: string;
+  region?: string;
+  access_key_id?: string;
+  secret_access_key?: string;
+  keys?: string[];
+  endpoint_url?: string;
+  // Common override
+  file_format?: FileFormat | null;
+}
+
+export interface FileInfo {
+  path: string;
+  name: string;
+  size?: number;
+  format?: FileFormat;
+}
+
+export interface FileMigrationRequest {
+  file_source: FileSourceConfig;
+  target: ConnectionConfig;
+  options: MigrationOptions;
+  session_id?: string;
+}
+
 export interface ConnectionConfig {
   db_type: DbType;
   host: string;
@@ -207,6 +248,20 @@ export async function fetchSchemaTables(
   return grouped;
 }
 
+export interface TransformDescriptor {
+  category: string;
+  label: string;
+  params: string[];
+  description: string;
+}
+
+export async function fetchTransforms(): Promise<Record<string, TransformDescriptor>> {
+  const res = await fetch(`${API_BASE}/transforms`);
+  if (!res.ok) throw new Error(`Failed to fetch transforms (${res.status})`);
+  const data = await res.json();
+  return data.transforms ?? {};
+}
+
 export async function fetchHistory(): Promise<HistoryEntry[]> {
   const res = await fetch(`${API_BASE}/history`);
   if (!res.ok) throw new Error(`Failed to fetch history (${res.status})`);
@@ -300,4 +355,107 @@ export async function resumeMigration(sessionId: string): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: sessionId }),
   });
+}
+
+// ── File Source API ─────────────────────────────────────────────────────────
+
+export interface FileSourceTestResponse {
+  success: boolean;
+  message: string;
+  files_count?: number;
+}
+
+/** Test connectivity to a file source (local / SFTP / S3). */
+export async function testFileSource(config: FileSourceConfig): Promise<FileSourceTestResponse> {
+  const res = await fetch(`${API_BASE}/file-source/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `File source test failed (${res.status})`);
+  }
+  return res.json();
+}
+
+/** List files available in a file source. */
+export async function listFiles(config: FileSourceConfig): Promise<FileInfo[]> {
+  const res = await fetch(`${API_BASE}/file-source/files`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) throw new Error(`Failed to list files (${res.status})`);
+  const data = await res.json();
+  return data.files ?? [];
+}
+
+/** Infer schema (table+columns) for the selected file paths. */
+export async function inferFileSchema(
+  config: FileSourceConfig,
+  filePaths: string[]
+): Promise<{ name: string; columns: { name: string; data_type: string; is_nullable: boolean; is_primary_key: boolean }[]; row_count: number }[]> {
+  const res = await fetch(`${API_BASE}/file-source/schema`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ config, file_paths: filePaths }),
+  });
+  if (!res.ok) throw new Error(`Failed to infer file schema (${res.status})`);
+  const data = await res.json();
+  return data.tables ?? [];
+}
+
+/**
+ * Start a file-to-database migration via SSE.
+ * Returns an AbortController and sessionId for pause/resume.
+ */
+export function startFileMigration(
+  request: FileMigrationRequest,
+  onEvent: (event: LogEvent) => void,
+  onError: (error: Error) => void
+): { controller: AbortController; sessionId: string } {
+  const controller = new AbortController();
+  const sessionId = crypto.randomUUID();
+  const requestWithSession = { ...request, session_id: sessionId };
+
+  fetch(`${API_BASE}/file-migrate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestWithSession),
+    signal: controller.signal,
+  })
+    .then(async (res) => {
+      if (!res.ok) throw new Error(`File migration request failed (${res.status})`);
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response body");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const event: LogEvent = JSON.parse(line.slice(6));
+              onEvent(event);
+            } catch {
+              // skip malformed lines
+            }
+          }
+        }
+      }
+      if (buffer.startsWith("data: ")) {
+        try { onEvent(JSON.parse(buffer.slice(6))); } catch { /* skip */ }
+      }
+    })
+    .catch((err) => {
+      if (err.name !== "AbortError") onError(err);
+    });
+
+  return { controller, sessionId };
 }

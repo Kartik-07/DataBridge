@@ -47,8 +47,8 @@ from schema_translator import (
     generate_insert,
     generate_upsert,
     generate_snowflake_staging_upsert,
-    translate_type,
     generate_add_primary_key,
+    apply_transform_rules,
 )
 from dependency import build_dependency_graph, topological_levels
 from batch_tracker import (
@@ -153,12 +153,14 @@ def _adapt_row(
     json_indices: set[int], 
     vector_indices: set[int], 
     target_db_type: DbType = DbType.MYSQL,
-    column_transforms: Optional[list[Optional[tuple[str, str]]]] = None,
+    column_transforms: Optional[list[Optional[dict]]] = None,
 ) -> tuple:
     """Convert Python dicts/lists in a row for insertion cleanly using pre-computed indices.
     
     This avoids O(N) isinstance checks on every cell of every row.
-    column_transforms: per-column (source_format, target_format) for date transforms, or None.
+    column_transforms: per-column transform descriptor dict, or None.
+      - ``{"type": "date", "source_format": ..., "target_format": ...}``
+      - ``{"type": "rule", "rules": "trim|uppercase|truncate:255"}``
     """
     
     def _pg_adapt_list(lst: list) -> list:
@@ -176,11 +178,17 @@ def _adapt_row(
     transforms = column_transforms or []
     adapted = []
     for i, val in enumerate(row):
-        # Apply date transform if configured
         if i < len(transforms) and transforms[i] is not None:
-            src_fmt, tgt_fmt = transforms[i]
-            val = _apply_date_transform(val, src_fmt or "YYYY-MM-DD HH:mm:ss", tgt_fmt or "ISO 8601")
-        # Always serialize if it happens to be a dict
+            t = transforms[i]
+            if t["type"] == "date":
+                val = _apply_date_transform(
+                    val,
+                    t["source_format"] or "YYYY-MM-DD HH:mm:ss",
+                    t["target_format"] or "ISO 8601",
+                )
+            elif t["type"] == "rule":
+                val = apply_transform_rules(val, t["rules"])
+
         if isinstance(val, dict):
             adapted.append(orjson.dumps(val).decode("utf-8"))
         elif isinstance(val, list):
@@ -188,8 +196,6 @@ def _adapt_row(
                 if i in json_indices or i in vector_indices:
                     adapted.append(orjson.dumps(val).decode("utf-8"))
                 else:
-                    # psycopg2 handles Python lists as PG arrays natively,
-                    # but we must stringify any inner JSON objects first.
                     adapted.append(_pg_adapt_list(val))
             else:
                 adapted.append(orjson.dumps(val).decode("utf-8"))
@@ -267,11 +273,16 @@ def _migrate_table_worker(
         
         json_indices, vector_indices = _get_json_and_vector_indices(table.columns)
         mappings = table_mappings or {}
-        column_transforms = []
+        column_transforms: list[dict | None] = []
         for col in table.columns:
             m = mappings.get(col.name)
-            if m and m.action == "transform" and m.source_format and m.target_format:
-                column_transforms.append((m.source_format, m.target_format))
+            if m and m.action == "transform":
+                if m.transform_rule:
+                    column_transforms.append({"type": "rule", "rules": m.transform_rule})
+                elif m.source_format and m.target_format:
+                    column_transforms.append({"type": "date", "source_format": m.source_format, "target_format": m.target_format})
+                else:
+                    column_transforms.append(None)
             else:
                 column_transforms.append(None)
 

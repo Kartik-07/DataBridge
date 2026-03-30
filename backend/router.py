@@ -12,6 +12,8 @@ from fastapi.responses import StreamingResponse
 from models import (
     ConnectionConfig,
     ConnectionTestResponse,
+    FileMigrationRequest,
+    FileSourceConfig,
     IntrospectResponse,
     MigrationRequest,
     TablesColumnsRequest,
@@ -25,8 +27,11 @@ from connectors import (
     get_tables_columns,
 )
 from migration import run_migration
-from schema_translator import translate_type
-from models import DbType
+from file_connectors import test_file_source, list_files, download_file
+from file_parsers import detect_format, infer_schema
+from file_migration import run_file_migration, get_file_schemas, _table_name_from_path
+from schema_translator import translate_type, AVAILABLE_TRANSFORMS
+from models import DbType, TableInfo
 
 from migration_state import _migration_pause_flags
 
@@ -114,6 +119,14 @@ async def api_translate_types(body: dict):
     return {"target_types": target_types}
 
 
+# ── Available transforms (for Schema Mapping UI) ────────────────────────────
+
+@router.get("/transforms")
+async def api_transforms():
+    """Return the catalog of available row-level data transforms."""
+    return {"transforms": AVAILABLE_TRANSFORMS}
+
+
 # ── Migrate (SSE Stream) ───────────────────────────────────────────────────
 
 @router.post("/migrate")
@@ -188,3 +201,83 @@ async def api_history():
     from history import get_history
     history = await asyncio.to_thread(get_history)
     return history
+
+
+# ── File Source ──────────────────────────────────────────────────────────────
+
+@router.post("/file-source/test")
+async def api_file_source_test(config: FileSourceConfig):
+    """Test connectivity to a file source (local / SFTP / S3).
+    Returns { success, message, files_count }."""
+    result = await asyncio.to_thread(test_file_source, config)
+    return result
+
+
+@router.post("/file-source/files")
+async def api_file_source_files(config: FileSourceConfig):
+    """List all discoverable files in the configured source.
+    Returns { files: [{ path, name, size, format }] }."""
+    files = await asyncio.to_thread(list_files, config)
+    return {"files": [f.model_dump() for f in files]}
+
+
+@router.post("/file-source/schema")
+async def api_file_source_schema(body: dict):
+    """Infer schema for a list of file paths within a source.
+    Body: { config: FileSourceConfig, file_paths: [str] }
+    Returns { tables: [TableInfo] } — one table per file."""
+    config = FileSourceConfig(**body["config"])
+    file_paths: list[str] = body.get("file_paths", [])
+    if not file_paths:
+        return {"tables": []}
+
+    def _infer():
+        return get_file_schemas(config, file_paths)
+
+    tables = await asyncio.to_thread(_infer)
+    return {"tables": [t.model_dump() for t in tables]}
+
+
+# ── File Migrate (SSE Stream) ────────────────────────────────────────────────
+
+@router.post("/file-migrate")
+async def api_file_migrate(request: FileMigrationRequest):
+    """
+    Start a file-to-database migration and stream log events via SSE.
+    Each event is a JSON object: { message, type, progress, [table_progress] }.
+    """
+
+    async def event_generator():
+        loop = asyncio.get_event_loop()
+        gen = run_file_migration(
+            request.file_source,
+            request.target,
+            request.options,
+            session_id=request.session_id,
+        )
+
+        def _next_event():
+            try:
+                return next(gen)
+            except StopIteration:
+                return None
+
+        while True:
+            event = await loop.run_in_executor(None, _next_event)
+            if event is None:
+                break
+            data = json.dumps(event)
+            yield f"data: {data}\n\n"
+            await asyncio.sleep(0.05)
+
+        yield f"data: {json.dumps({'done': True})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

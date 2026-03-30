@@ -3,6 +3,60 @@
     "source": "postgresql",
     "target": "postgresql",
     "status": "success",
+    "tables": 16,
+    "rows": 22586,
+    "duration": "2m 15s",
+    "timestamp": "2026-03-22 19:46"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 16,
+    "rows": 22586,
+    "duration": "2m 23s",
+    "timestamp": "2026-03-22 19:38"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 16,
+    "rows": 22586,
+    "duration": "1m 47s",
+    "timestamp": "2026-03-21 01:51"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 16,
+    "rows": 22586,
+    "duration": "0m 13s",
+    "timestamp": "2026-03-21 01:20"
+  },
+  {
+    "source": "snowflake",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 3,
+    "rows": 103,
+    "duration": "0m 25s",
+    "timestamp": "2026-03-11 15:37"
+  },
+  {
+    "source": "snowflake",
+    "target": "postgresql",
+    "status": "success",
+    "tables": 1,
+    "rows": 13677,
+    "duration": "0m 21s",
+    "timestamp": "2026-03-10 00:52"
+  },
+  {
+    "source": "postgresql",
+    "target": "postgresql",
+    "status": "success",
     "tables": 14,
     "rows": 154124,
     "duration": "1m 1s",

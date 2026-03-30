@@ -1,19 +1,24 @@
 import { useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { ConnectionForm } from "@/components/ConnectionForm";
+import { FileSourceForm } from "@/components/FileSourceForm";
 import { MigrationOptions } from "@/components/MigrationOptions";
 import { MigrationLog, type LogEntry } from "@/components/MigrationLog";
 import { SchemaMapping } from "@/components/SchemaMapping";
 import { type DbType } from "@/components/DatabaseIcon";
-import { Play, RotateCcw, ArrowRight, Layers3, Share2, ClipboardCheck, Upload, Download, ShieldCheck, Lightbulb, Activity } from "lucide-react";
+import { Play, RotateCcw, ArrowRight, Layers3, Share2, ClipboardCheck, Upload, Download, ShieldCheck, Lightbulb, Activity, Database, File } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 import {
   startMigration,
+  startFileMigration,
   fetchSchemas,
+  inferFileSchema,
   pauseMigration,
   resumeMigration,
   type ConnectionConfig,
+  type FileSourceConfig,
+  type FileInfo,
   type MigrationOptions as MigrationOptionsType,
   type LogEvent,
   type TableProgressEntry,
@@ -39,12 +44,22 @@ const defaultOptions: MigrationOptionsType = {
 };
 
 const Index = () => {
+  // "database" or "file" source mode
+  const [sourceCategory, setSourceCategory] = useState<"database" | "file">("database");
+
+  // Database source state
   const [sourceType, setSourceType] = useState<DbType>("postgresql");
   const [targetType, setTargetType] = useState<DbType>("mysql");
   const [sourceConnected, setSourceConnected] = useState(false);
   const [targetConnected, setTargetConnected] = useState(false);
   const [sourceConfig, setSourceConfig] = useState<ConnectionConfig | null>(null);
   const [targetConfig, setTargetConfig] = useState<ConnectionConfig | null>(null);
+
+  // File source state
+  const [fileSourceConfig, setFileSourceConfig] = useState<FileSourceConfig | null>(null);
+  const [fileSourceConnected, setFileSourceConnected] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<FileInfo[]>([]);
+
   const [migrating, setMigrating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -67,7 +82,6 @@ const Index = () => {
   const handleSourceConnect = async (config: ConnectionConfig) => {
     setSourceConfig(config);
     setSourceConnected(true);
-    // Fetch available schemas from source
     try {
       const schemas = await fetchSchemas(config);
       setAvailableSchemas(schemas);
@@ -81,48 +95,74 @@ const Index = () => {
     setTargetConnected(true);
   };
 
-  const handleMigrate = (dryRun = false) => {
-    if (!sourceConfig || !targetConfig) return;
+  const handleFileSourceConnect = async (config: FileSourceConfig, files: FileInfo[]) => {
+    setFileSourceConfig(config);
+    setSelectedFiles(files);
+    setFileSourceConnected(true);
 
+    // Infer schemas to populate options.mappings and selected_tables
+    try {
+      const filePaths = files.map(f => f.path);
+      const tables = await inferFileSchema(config, filePaths);
+      // Set selected_tables using filename stems as table names (no schema prefix)
+      const selectedTables: Record<string, string[]> = { "": tables.map(t => t.name) };
+      setOptions(prev => ({ ...prev, selected_tables: selectedTables }));
+      setAvailableSchemas([]);
+    } catch {
+      // Non-critical
+    }
+  };
+
+  const handleMigrate = (dryRun = false) => {
     setMigrating(true);
     setIsDryRun(dryRun);
     setProgress(0);
     setLogs([]);
     setTableProgress([]);
     setActiveTab("status");
-
     setIsPaused(false);
-    const { controller, sessionId } = startMigration(
-      { source: sourceConfig, target: targetConfig, options: { ...options, dry_run: dryRun } },
-      (event: LogEvent) => {
-        if (event.done) {
-          setMigrating(false);
-          setIsPaused(false);
-          return;
-        }
-        if (event.message && event.type) {
-          addLog(event.message, event.type as LogEntry["type"]);
-        }
-        if (event.progress !== undefined && event.progress >= 0) {
-          setProgress(event.progress);
-        }
-        if (event.table_progress) {
-          setTableProgress(event.table_progress);
-        }
-      },
-      (error: Error) => {
+
+    const onEvent = (event: LogEvent) => {
+      if (event.done) {
         setMigrating(false);
         setIsPaused(false);
-        toast({
-          title: "Migration failed",
-          description: error.message,
-          variant: "destructive",
-        });
-        addLog(`Error: ${error.message}`, "error");
+        return;
       }
-    );
-    abortRef.current = controller;
-    sessionIdRef.current = sessionId;
+      if (event.message && event.type) {
+        addLog(event.message, event.type as LogEntry["type"]);
+      }
+      if (event.progress !== undefined && event.progress >= 0) {
+        setProgress(event.progress);
+      }
+      if (event.table_progress) {
+        setTableProgress(event.table_progress);
+      }
+    };
+
+    const onError = (error: Error) => {
+      setMigrating(false);
+      setIsPaused(false);
+      toast({ title: "Migration failed", description: error.message, variant: "destructive" });
+      addLog(`Error: ${error.message}`, "error");
+    };
+
+    if (sourceCategory === "file" && fileSourceConfig && targetConfig) {
+      const { controller, sessionId } = startFileMigration(
+        { file_source: fileSourceConfig, target: targetConfig, options: { ...options, dry_run: dryRun } },
+        onEvent,
+        onError,
+      );
+      abortRef.current = controller;
+      sessionIdRef.current = sessionId;
+    } else if (sourceConfig && targetConfig) {
+      const { controller, sessionId } = startMigration(
+        { source: sourceConfig, target: targetConfig, options: { ...options, dry_run: dryRun } },
+        onEvent,
+        onError,
+      );
+      abortRef.current = controller;
+      sessionIdRef.current = sessionId;
+    }
   };
 
   const handlePauseMigration = async () => {
@@ -164,6 +204,9 @@ const Index = () => {
     setTargetConnected(false);
     setSourceConfig(null);
     setTargetConfig(null);
+    setFileSourceConfig(null);
+    setFileSourceConnected(false);
+    setSelectedFiles([]);
     setMigrating(false);
     setIsDryRun(false);
     setProgress(0);
@@ -174,7 +217,8 @@ const Index = () => {
     setActiveTab("source");
   };
 
-  const bothConnected = sourceConnected && targetConnected;
+  const sourceReady = sourceCategory === "file" ? (fileSourceConnected && targetConnected) : (sourceConnected && targetConnected);
+  const bothConnected = sourceReady;
 
   return (
     <div className="min-h-screen bg-[#FAFAFA]">
@@ -217,19 +261,62 @@ const Index = () => {
           <TabsContent value="source" className="mt-0 outline-none">
             {/* 3-Column Layout */}
             <div className="grid lg:grid-cols-3 gap-6">
-              {/* Column 1: Source */}
-              <ConnectionForm
-                title="Source Database"
-                subtitle="The origin of your data transfer"
-                icon={<Upload className="h-5 w-5 text-[#E85C1C]" />}
-                linkText="URI"
-                linkHref="#"
-                testButtonText="Test Source Connection"
-                dbType={sourceType}
-                onDbTypeChange={setSourceType}
-                connected={sourceConnected}
-                onConnect={handleSourceConnect}
-              />
+              {/* Column 1: Source — Database or File */}
+              <div className="flex flex-col gap-4">
+                {/* Source category toggle */}
+                <div className="flex gap-2 rounded-xl border border-border/60 bg-card p-1.5 shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => { setSourceCategory("database"); setFileSourceConnected(false); setFileSourceConfig(null); setSelectedFiles([]); }}
+                    className={`flex-1 flex items-center justify-center gap-2 rounded-lg py-2 text-[13px] font-semibold transition-all ${
+                      sourceCategory === "database"
+                        ? "bg-[#E85C1C] text-white shadow-sm"
+                        : "text-muted-foreground hover:bg-muted/30"
+                    }`}
+                  >
+                    <Database className="h-4 w-4" />
+                    Database
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setSourceCategory("file"); setSourceConnected(false); setSourceConfig(null); }}
+                    className={`flex-1 flex items-center justify-center gap-2 rounded-lg py-2 text-[13px] font-semibold transition-all ${
+                      sourceCategory === "file"
+                        ? "bg-[#E85C1C] text-white shadow-sm"
+                        : "text-muted-foreground hover:bg-muted/30"
+                    }`}
+                  >
+                    <File className="h-4 w-4" />
+                    File
+                  </button>
+                </div>
+
+                <AnimatePresence mode="wait">
+                  {sourceCategory === "database" ? (
+                    <motion.div key="db-form" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                      <ConnectionForm
+                        title="Source Database"
+                        subtitle="The origin of your data transfer"
+                        icon={<Upload className="h-5 w-5 text-[#E85C1C]" />}
+                        linkText="URI"
+                        linkHref="#"
+                        testButtonText="Test Source Connection"
+                        dbType={sourceType}
+                        onDbTypeChange={setSourceType}
+                        connected={sourceConnected}
+                        onConnect={handleSourceConnect}
+                      />
+                    </motion.div>
+                  ) : (
+                    <motion.div key="file-form" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                      <FileSourceForm
+                        connected={fileSourceConnected}
+                        onConnect={handleFileSourceConnect}
+                      />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
 
               {/* Column 2: Target */}
               <ConnectionForm
@@ -280,7 +367,10 @@ const Index = () => {
                     ) : (
                       <>
                         <p className="text-slate-400 font-medium">
-                          {sourceConnected ? "SOURCE CONNECTED" : "WAITING: SOURCE CONNECTION"}
+                          {sourceCategory === "file"
+                            ? (fileSourceConnected ? `SOURCE: ${selectedFiles.length} FILE(S) READY` : "WAITING: FILE SOURCE")
+                            : (sourceConnected ? "SOURCE CONNECTED" : "WAITING: SOURCE CONNECTION")
+                          }
                         </p>
                         <p className="text-slate-400 font-medium">
                           {targetConnected ? "TARGET CONNECTED" : "WAITING: TARGET CONNECTION"}
@@ -331,6 +421,9 @@ const Index = () => {
                 onOptionsChange={setOptions}
                 availableSchemas={availableSchemas}
                 sourceConfig={sourceConfig}
+                fileSourceConfig={fileSourceConfig}
+                selectedFiles={selectedFiles}
+                isFileSource={sourceCategory === "file"}
                 onNext={() => setActiveTab("mapping")}
                 onCancel={() => setActiveTab("source")}
                 migrating={migrating}
@@ -345,6 +438,9 @@ const Index = () => {
                 onOptionsChange={setOptions}
                 sourceConfig={sourceConfig}
                 targetConfig={targetConfig}
+                fileSourceConfig={fileSourceConfig}
+                selectedFiles={selectedFiles}
+                isFileSource={sourceCategory === "file"}
                 onNext={() => setActiveTab("validation")}
                 onBack={() => setActiveTab("scope")}
               />

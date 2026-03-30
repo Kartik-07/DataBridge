@@ -16,6 +16,52 @@ class DbType(str, Enum):
     SQLSERVER = "sqlserver"
 
 
+# ── File Source Types ────────────────────────────────────────────────────────
+
+class FileSourceType(str, Enum):
+    LOCAL = "local"
+    SFTP = "sftp"
+    S3 = "s3"
+
+
+class FileFormat(str, Enum):
+    JSON = "json"
+    JSONL = "jsonl"
+    CSV = "csv"
+    XLSX = "xlsx"
+    PARQUET = "parquet"
+
+
+class FileSourceConfig(BaseModel):
+    source_type: FileSourceType
+    # Local FS
+    file_paths: list[str] = []
+    # SFTP
+    host: Optional[str] = None
+    port: int = 22
+    username: Optional[str] = None
+    password: Optional[str] = None
+    key_path: Optional[str] = None     # path to private key file on server
+    remote_paths: list[str] = []
+    # S3
+    bucket: Optional[str] = None
+    region: Optional[str] = None
+    access_key_id: Optional[str] = None
+    secret_access_key: Optional[str] = None
+    keys: list[str] = []               # S3 object keys or prefixes
+    endpoint_url: Optional[str] = None  # for MinIO / custom endpoints
+    # Common
+    file_format: Optional[FileFormat] = None  # None = auto-detect from extension
+
+
+class FileInfo(BaseModel):
+    """Metadata about a discovered file."""
+    path: str
+    name: str
+    size: Optional[int] = None
+    format: Optional[FileFormat] = None
+
+
 # ── Connection ──────────────────────────────────────────────────────────────
 
 class ConnectionConfig(BaseModel):
@@ -50,6 +96,8 @@ class ColumnInfo(BaseModel):
     is_nullable: bool = True
     default: Optional[str] = None
     is_primary_key: bool = False
+    # True for PostgreSQL USER-DEFINED / domain types, MySQL ENUM/SET, SQL Server DOMAIN_NAME, etc.
+    is_user_defined: bool = False
 
 
 class TableInfo(BaseModel):
@@ -107,3 +155,10 @@ class LogEntry(BaseModel):
     message: str
     type: str = "info"  # info | success | warning | error
     progress: int = 0
+
+
+class FileMigrationRequest(BaseModel):
+    file_source: FileSourceConfig
+    target: ConnectionConfig
+    options: MigrationOptions = Field(default_factory=MigrationOptions)
+    session_id: Optional[str] = None
