@@ -89,8 +89,8 @@ HOST=0.0.0.0
 PORT=8000
 LOG_LEVEL=info
 
-# CORS Configuration (frontend URLs)
-CORS_ORIGINS=["http://localhost:5173", "http://localhost:3000"]
+# CORS Configuration (comma-separated URLs, or JSON-style list in .env parsers)
+CORS_ORIGINS=http://localhost:5173,http://localhost:8080,http://127.0.0.1:8080
 
 # Migration Settings
 MIGRATION_BATCH_SIZE=10000        # Rows per INSERT batch
@@ -141,6 +141,18 @@ bun run build
 bun run preview
 ```
 
+### Deploying on Railway
+
+This repo includes a **root `Dockerfile`** that builds the Vite frontend and runs FastAPI with static assets (`STATIC_DIR`). A **`railway.json`** file sets `build.builder` to **`DOCKERFILE`** so Railway uses that image instead of **Railpack** (which only sees Python, cannot infer a start command, and would not ship the React UI).
+
+1. **Connect the repo** in Railway and deploy. The dashboard will pick up `railway.json` and the `Dockerfile`.
+2. **`PORT`**: Railway injects `PORT` automatically. The Docker `CMD` binds Uvicorn to `$PORT` (do not hard-code `8000` in the service start command when using this Dockerfile).
+3. **Public URL**: In the service → **Networking**, generate a public domain. The **web UI** is at `/`, API at `/api`, OpenAPI at `/docs`. The exact hostname is shown in the dashboard (for example `https://<name>.up.railway.app`).
+4. **`CORS_ORIGINS`**: Optional if browser and API share the same Railway host. If you use a separate frontend origin, set `CORS_ORIGINS` to that origin (comma-separated).
+5. **Health check**: `GET /health` returns `{"status":"ok"}` and is referenced in `railway.json` so healthchecks do not need to hit `/` or `/docs`.
+
+**If you deploy without Docker** (Python + Railpack only): set an explicit start command, for example `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`. That serves **API only**—there is no production frontend unless you add a second service or use the Docker build above.
+
 ## Project Structure
 
 ```
@@ -177,6 +189,8 @@ DataBridge/
 │   └── tsconfig.json
 │
 ├── requirements.txt             # Python dependencies
+├── Dockerfile                   # Production image (frontend build + API + static)
+├── railway.json               # Railway: force Docker build, healthcheck
 └── README.md                    # This file
 ```
 
@@ -301,6 +315,12 @@ The frontend receives updates via Server-Sent Events (SSE):
 ```
 
 ## Troubleshooting
+
+### Railway deployment
+
+- **Railpack / “No start command detected”**: Use the repo `Dockerfile` (see `railway.json`) so the build is not Python-only Railpack.
+- **Container restarts / unhealthy**: Ensure the process listens on **`$PORT`** (the Docker image does). Use **`GET /health`** for healthchecks, not a slow or auth-protected path.
+- **API works but no UI**: You need the Docker build that sets `STATIC_DIR`; backend-only Railpack deploy does not include the Vite bundle.
 
 ### Connection Issues
 
