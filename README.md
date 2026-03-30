@@ -150,8 +150,9 @@ This repo includes a **root `Dockerfile`** that builds the Vite frontend and run
 3. **Public URL**: In the service → **Networking**, generate a public domain. The **web UI** is at `/`, API at `/api`, OpenAPI at `/docs`. The exact hostname is shown in the dashboard (for example `https://<name>.up.railway.app`).
 4. **`CORS_ORIGINS`**: Optional if browser and API share the same Railway host. If you use a separate frontend origin, set `CORS_ORIGINS` to that origin (comma-separated).
 5. **Health check**: `GET /health` returns `{"status":"ok"}` and is referenced in `railway.json` so healthchecks do not need to hit `/` or `/docs`.
+6. **Start command**: `railway.json` sets a shell-based `startCommand` that `cd`s to **`/app/backend`** (the path **inside the Docker image**, not the repo’s `backend/` folder). That overrides any bad dashboard value such as `cd backend && uvicorn …`, which fails in the container (wrong path) or when Railway runs the command without a shell (`cd` not found).
 
-**If you deploy without Docker** (Python + Railpack only): set an explicit start command, for example `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`. That serves **API only**—there is no production frontend unless you add a second service or use the Docker build above.
+**If you deploy without Docker** (Python + Railpack only): set **root directory** to `backend` in the service settings, then use `uvicorn main:app --host 0.0.0.0 --port $PORT` (no `cd`). That serves **API only**—there is no production frontend unless you add a second service or use the Docker build above.
 
 ## Project Structure
 
@@ -319,6 +320,7 @@ The frontend receives updates via Server-Sent Events (SSE):
 ### Railway deployment
 
 - **Railpack / “No start command detected”**: Use the repo `Dockerfile` (see `railway.json`) so the build is not Python-only Railpack.
+- **`cd` not found / invalid start command**: Do not use `cd backend && uvicorn …` for the **Docker** image—paths are under `/app`. Prefer the `deploy.startCommand` in `railway.json`, or clear the dashboard override so the image `CMD` runs.
 - **Container restarts / unhealthy**: Ensure the process listens on **`$PORT`** (the Docker image does). Use **`GET /health`** for healthchecks, not a slow or auth-protected path.
 - **API works but no UI**: You need the Docker build that sets `STATIC_DIR`; backend-only Railpack deploy does not include the Vite bundle.
 
