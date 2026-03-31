@@ -149,7 +149,7 @@ This repo includes a **root `Dockerfile`** that builds the Vite frontend and run
 2. **`PORT`**: Railway injects `PORT` automatically. The Docker `CMD` binds Uvicorn to `$PORT` (do not hard-code `8000` in the service start command when using this Dockerfile).
 3. **Public URL**: In the service → **Networking**, generate a public domain. The **web UI** is at `/`, API at `/api`, OpenAPI at `/docs`. The exact hostname is shown in the dashboard (for example `https://<name>.up.railway.app`).
 4. **`CORS_ORIGINS`**: Optional if browser and API share the same Railway host. If you use a separate frontend origin, set `CORS_ORIGINS` to that origin (comma-separated).
-5. **Health check**: `GET /health` returns `{"status":"ok"}` and is referenced in `railway.json` so healthchecks do not need to hit `/` or `/docs`.
+5. **Health check**: `GET /health` returns `{"status":"ok"}`. The repo **`railway.json` disables the deploy healthcheck** (`healthcheckPath: null`) so Railway does not fail a deploy when the probe races slow startup or mis-reads responses. You can turn it back on in the dashboard or in `railway.json` if you want probes after the app is stable.
 6. **Start command**: `railway.json` sets **`deploy.startCommand` to `null`** so Railway uses the image **`CMD`** (`docker-entrypoint.sh` → `uvicorn`), not a dashboard override. If you still see **“Application failed to respond”** (502), open the service → **Deploy** / **Settings** and **remove any custom Start Command** so it does not override the Dockerfile.
 
 **If you deploy without Docker** (Python + Railpack only): set **root directory** to `backend` in the service settings, then use `uvicorn main:app --host 0.0.0.0 --port $PORT` (no `cd`). That serves **API only**—there is no production frontend unless you add a second service or use the Docker build above.
@@ -323,7 +323,7 @@ The frontend receives updates via Server-Sent Events (SSE):
 - **Railpack / “No start command detected”**: Use the repo `Dockerfile` (see `railway.json`) so the build is not Python-only Railpack.
 - **“Application failed to respond” / 502**: Usually the container is not listening on **`$PORT`**, crashed on boot, or a **custom Start Command** in the Railway UI overrides the Dockerfile. Clear the custom start command, redeploy, and read **Deploy logs** for tracebacks. The Docker image runs `docker-entrypoint.sh`, which binds Uvicorn to **`$PORT`**.
 - **`cd` not found / invalid start command**: Do not use `cd backend && uvicorn …` for the **Docker** image. Use the default **`CMD`** from the Dockerfile (or `deploy.startCommand: null` in `railway.json`).
-- **Container restarts / unhealthy**: Ensure the process listens on **`$PORT`** (the Docker image does). Use **`GET /health`** for healthchecks, not a slow or auth-protected path.
+- **Container restarts / unhealthy**: Ensure the process listens on **`$PORT`** (the Docker image does). **Deploy logs** may show normal Uvicorn lines like `Waiting for application startup` with **severity “error”** — Uvicorn writes INFO to stderr; that is a **log classification quirk**, not a crash (see `docker-entrypoint.sh` redirecting `2>&1` to reduce this).
 - **API works but no UI**: You need the Docker build that sets `STATIC_DIR`; backend-only Railpack deploy does not include the Vite bundle.
 
 ### Connection Issues
