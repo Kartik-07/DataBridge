@@ -21,7 +21,11 @@ COPY --from=frontend /app/frontend/dist ./static
 
 ENV PYTHONPATH=/app/backend
 ENV STATIC_DIR=/app/static
+ENV PYTHONUNBUFFERED=1
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 WORKDIR /app/backend
 EXPOSE 8000
-CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["/usr/local/bin/docker-entrypoint.sh"]
